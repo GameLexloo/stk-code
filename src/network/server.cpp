@@ -65,9 +65,9 @@ Server::Server(const XMLNode& xml)
     m_server_owner_name = L"-";
 
     // Show owner name as Official right now if official server hoster account
-    bool official = false;
-    xml.get("official", &official);
-    if (official)
+    m_official = false;
+    xml.get("official", &m_official);
+    if (m_official)
     {
         // I18N: Official means this server is hosted by STK team
         m_server_owner_name = _("Official");
@@ -132,6 +132,7 @@ Server::Server(unsigned server_id, const core::stringw &name, int max_players,
     m_server_mode        = server_mode;
     m_password_protected = password_protected;
     m_distance = 0.0f;
+    m_official = false;
 }   // server(server_id, ...)
 
 // ----------------------------------------------------------------------------

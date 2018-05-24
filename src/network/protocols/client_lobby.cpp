@@ -33,6 +33,7 @@
 #include "network/protocols/game_protocol.hpp"
 #include "network/protocols/game_events_protocol.hpp"
 #include "network/race_event_manager.hpp"
+#include "network/server.hpp"
 #include "network/stk_host.hpp"
 #include "network/stk_peer.hpp"
 #include "online/online_player_profile.hpp"
@@ -45,6 +46,8 @@
 #include "tracks/track.hpp"
 #include "tracks/track_manager.hpp"
 #include "utils/log.hpp"
+
+#include <xxtea.h>
 
 // ============================================================================
 /** The protocol that manages starting a race with the server. It uses a 
@@ -66,10 +69,11 @@ engine.
 
 */
 
-ClientLobby::ClientLobby() : LobbyProtocol(NULL)
+ClientLobby::ClientLobby(const TransportAddress& a, std::shared_ptr<Server> s)
+           : LobbyProtocol(NULL)
 {
-
-    m_server_address.clear();
+    m_server_address = a;
+    m_server = s;
     setHandleDisconnections(true);
 }   // ClientLobby
 
@@ -91,14 +95,6 @@ void ClientLobby::clearPlayers()
         input_manager->getDeviceManager()->clearLatestUsedDevice();
     }
 }   // clearPlayers
-
-//-----------------------------------------------------------------------------
-/** Sets the address of the server. 
- */
-void ClientLobby::setAddress(const TransportAddress &address)
-{
-    m_server_address = address;
-}   // setAddress
 
 //-----------------------------------------------------------------------------
 void ClientLobby::setup()
@@ -263,55 +259,72 @@ void ClientLobby::update(int ticks)
         break;
     case LINKED:
     {
-        NetworkString *ns = getNetworkString();
+        NetworkString* ns = getNetworkString();
         ns->addUInt8(LE_CONNECTION_REQUESTED)
             .addUInt8(NetworkConfig::m_server_version)
             .encodeString(NetworkConfig::get()->getPassword());
 
+        Online::OnlinePlayerProfile* opp =
+            dynamic_cast<Online::OnlinePlayerProfile*>
+            (PlayerManager::getCurrentPlayer());
+        std::string encryption;
+        BareNetworkString* rest = new BareNetworkString();
+
+        if (opp && opp->getOnlineId() != 0)
+        {
+            uint32_t id = opp->getOnlineId();
+            ns->addUInt32(id);
+            if (m_server->isOfficial())
+            {
+                // Enable encryption with token, name inside rest for
+                // validation in server
+                encryption = opp->getToken();
+                rest->encodeString(opp->getProfile()->getUserName());
+            }
+            else
+            {
+                // 0 indicates no encryption
+                ns->addUInt32(0);
+                ns->encodeString(opp->getProfile()->getUserName());
+            }
+        }
+        else
+            ns->addUInt32(0);
+
         assert(!NetworkConfig::get()->isAddingNetworkPlayers());
-        ns->addUInt8(
+        rest->addUInt8(
             (uint8_t)NetworkConfig::get()->getNetworkPlayers().size());
-        // Only first player has online name and profile
-        bool first_player = true;
+
         for (auto& p : NetworkConfig::get()->getNetworkPlayers())
         {
             core::stringw name;
             PlayerProfile* player = std::get<1>(p);
-            if (PlayerManager::getCurrentOnlineState() ==
-                PlayerProfile::OS_SIGNED_IN && first_player)
-            {
-                name = PlayerManager::getCurrentOnlineUserName();
-            }
-            else
-            {
-                name = player->getName();
-            }
-            std::string name_u8 = StringUtils::wideToUtf8(name);
-            ns->encodeString(name_u8).addFloat(player->getDefaultKartColor());
-            Online::OnlinePlayerProfile* opp =
-                dynamic_cast<Online::OnlinePlayerProfile*>(player);
-            ns->addUInt32(first_player && opp && opp->getProfile() ?
-                opp->getProfile()->getID() : 0);
+            rest->encodeString(player->getName()).
+                addFloat(player->getDefaultKartColor());
             // Per-player handicap
-            ns->addUInt8(std::get<2>(p));
-            first_player = false;
+            rest->addUInt8(std::get<2>(p));
         }
+
         auto all_k = kart_properties_manager->getAllAvailableKarts();
         auto all_t = track_manager->getAllTrackIdentifiers();
         if (all_k.size() >= 65536)
             all_k.resize(65535);
         if (all_t.size() >= 65536)
             all_t.resize(65535);
-        ns->addUInt16((uint16_t)all_k.size()).addUInt16((uint16_t)all_t.size());
+        rest->addUInt16((uint16_t)all_k.size()).addUInt16((uint16_t)all_t.size());
         for (const std::string& kart : all_k)
         {
-            ns->encodeString(kart);
+            rest->encodeString(kart);
         }
         for (const std::string& track : all_t)
         {
-            ns->encodeString(track);
+            rest->encodeString(track);
         }
+        if (!encryption.empty())
+            rest = encryptConnectionRequest(rest, encryption);
 
+        *ns += *rest;
+        delete rest;
         sendToServer(ns);
         delete ns;
         m_state.store(REQUESTING_CONNECTION);
@@ -335,6 +348,32 @@ void ClientLobby::update(int ticks)
         break;
     }
 }   // update
+
+//-----------------------------------------------------------------------------
+BareNetworkString* ClientLobby::encryptConnectionRequest
+    (BareNetworkString* rest, const std::string& token)
+{
+    std::array<uint8_t, 16> key = getKeyFromToken(token);
+    size_t encryption_size = 0;
+    void* encrypted = xxtea_encrypt(rest->getData(), rest->getTotalSize(),
+        key.data(), &encryption_size);
+    BareNetworkString* result = new BareNetworkString();
+    if (encrypted == NULL)
+    {
+        // Failed
+        result->addUInt32(0);
+        *result += BareNetworkString(rest->getData(), rest->getTotalSize());
+    }
+    else
+    {
+        Log::info("ClientLobby", "Server will validate this online player.");
+        result->addUInt32((uint32_t)encryption_size);
+        *result += BareNetworkString((const char*)encrypted, encryption_size);
+        free(encrypted);
+    }
+    delete rest;
+    return result;
+}   // encryptConnectionRequest
 
 //-----------------------------------------------------------------------------
 void ClientLobby::displayPlayerVote(Event* event)
@@ -589,6 +628,10 @@ void ClientLobby::connectionRefused(Event* event)
     case RR_TOO_MANY_PLAYERS:
         STKHost::get()->setErrorMessage(
             _("Connection refused: Server is full."));
+        break;
+    case RR_INVALID_PLAYER:
+        STKHost::get()->setErrorMessage(
+            _("Connection refused: Invalid player connecting."));
         break;
     }
     STKHost::get()->disconnectAllPeers(false/*timeout_waiting*/);

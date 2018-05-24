@@ -44,6 +44,7 @@
 #include <algorithm>
 #include <iterator>
 #include <fstream>
+#include <xxtea.h>
 
 /** This is the central game setup protocol running in the server. It is
  *  mostly a finite state machine. Note that all nodes in ellipses and light
@@ -486,7 +487,7 @@ void ServerLobby::update(int ticks)
 void ServerLobby::registerServer()
 {
     Online::XMLRequest *request = new Online::XMLRequest();
-    NetworkConfig::get()->setUserDetails(request, "create");
+    NetworkConfig::get()->setServerDetails(request, "create");
     request->addParameter("address",      m_server_address.getIP()        );
     request->addParameter("port",         m_server_address.getPort()      );
     request->addParameter("private_port",
@@ -531,7 +532,7 @@ void ServerLobby::registerServer()
 void ServerLobby::unregisterServer()
 {
     Online::XMLRequest* request = new Online::XMLRequest();
-    NetworkConfig::get()->setUserDetails(request, "stop");
+    NetworkConfig::get()->setServerDetails(request, "stop");
 
     request->addParameter("address", m_server_address.getIP());
     request->addParameter("port", m_server_address.getPort());
@@ -671,7 +672,7 @@ void ServerLobby::checkIncomingConnectionRequests()
     // Now poll the stk server
     last_poll_time = StkTime::getRealTime();
     Online::XMLRequest* request = new Online::XMLRequest();
-    NetworkConfig::get()->setUserDetails(request, "poll-connection-requests");
+    NetworkConfig::get()->setServerDetails(request, "poll-connection-requests");
 
     const TransportAddress &addr = STKHost::get()->getPublicAddress();
     request->addParameter("address", addr.getIP()  );
@@ -880,7 +881,38 @@ void ServerLobby::connectionRequested(Event* event)
         return;
     }
 
-    unsigned player_count = data.getUInt8();
+    uint32_t online_id = data.getUInt32();
+    uint32_t decryption_length = 0;
+    if (online_id > 0)
+        decryption_length = data.getUInt32();
+    std::unique_ptr<BareNetworkString> rest
+        (new BareNetworkString(data.getCurrentData(), data.size()));
+
+    core::stringw online_name;
+    if (decryption_length > 0)
+    {
+        decryptConnectionRequest(rest, decryption_length, online_id,
+            &online_name);
+    }
+    else if (online_id > 0)
+    {
+        // No decryption and validation is needed
+        rest->decodeStringW(&online_name);
+    }
+
+    // Failed decryption if online_name is empty
+    if (decryption_length > 0 && online_name.empty())
+    {
+        NetworkString *message = getNetworkString(2);
+        message->addUInt8(LE_CONNECTION_REFUSED).addUInt8(RR_INVALID_PLAYER);
+        peer->sendPacket(message);
+        peer->reset();
+        delete message;
+        Log::verbose("ServerLobby", "Player refused: invalid player");
+        return;
+    }
+
+    unsigned player_count = rest->getUInt8();
     if (m_game_setup->getPlayerCount() + player_count >
         NetworkConfig::get()->getMaxPlayers())
     {
@@ -895,15 +927,14 @@ void ServerLobby::connectionRequested(Event* event)
 
     for (unsigned i = 0; i < player_count; i++)
     {
-        std::string name_u8;
-        data.decodeString(&name_u8);
-        core::stringw name = StringUtils::utf8ToWide(name_u8);
-        float default_kart_color = data.getFloat();
-        uint32_t online_id = data.getUInt32();
+        core::stringw name;
+        rest->decodeStringW(&name);
+        float default_kart_color = rest->getFloat();
         PerPlayerDifficulty per_player_difficulty =
-            (PerPlayerDifficulty)data.getUInt8();
+            (PerPlayerDifficulty)rest->getUInt8();
         peer->addPlayer(std::make_shared<NetworkPlayerProfile>
-            (peer, name, peer->getHostId(), default_kart_color, online_id,
+            (peer, i == 0 && !online_name.empty() ? online_name : name,
+            peer->getHostId(), default_kart_color, i == 0 ? online_id : 0,
             per_player_difficulty, (uint8_t)i));
     }
 
@@ -944,18 +975,18 @@ void ServerLobby::connectionRequested(Event* event)
     // Connection accepted.
     // ====================
     std::set<std::string> client_karts, client_tracks;
-    const unsigned kart_num = data.getUInt16();
-    const unsigned track_num = data.getUInt16();
+    const unsigned kart_num = rest->getUInt16();
+    const unsigned track_num = rest->getUInt16();
     for (unsigned i = 0; i < kart_num; i++)
     {
         std::string kart;
-        data.decodeString(&kart);
+        rest->decodeString(&kart);
         client_karts.insert(kart);
     }
     for (unsigned i = 0; i < track_num; i++)
     {
         std::string track;
-        data.decodeString(&track);
+        rest->decodeString(&track);
         client_tracks.insert(track);
     }
 
@@ -1038,6 +1069,56 @@ void ServerLobby::connectionRequested(Event* event)
     }
     updatePlayerList();
 }   // connectionRequested
+
+//-----------------------------------------------------------------------------
+void ServerLobby::decryptConnectionRequest
+    (std::unique_ptr<BareNetworkString>& rest, unsigned length,
+     uint32_t online_id, core::stringw* real_online_name)
+{
+    Online::XMLRequest *request = new Online::XMLRequest();
+    NetworkConfig::get()->setUserDetails(request, "validate-player");
+    request->addParameter("id", online_id);
+    request->executeNow();
+
+    const XMLNode * result = request->getXMLData();
+    std::string rec_success;
+    if (result->get("success", &rec_success) && rec_success == "yes")
+    {
+        std::string username, token;
+        result->get("username", &username);
+        result->get("token", &token);
+        std::array<uint8_t, 16> key = getKeyFromToken(token);
+        size_t decryption_size = 0;
+        char* decrypted = (char*)xxtea_decrypt(rest->getData(),
+            rest->getTotalSize(), key.data(), &decryption_size);
+        if (decrypted != NULL && decryption_size > username.size() + 1)
+        {
+            // Check inside the decrypted string if player name is same
+            // Skip 1st byte by encodeString
+            std::string cmp(decrypted + 1, username.size());
+            if (cmp == username)
+            {
+                rest.reset(new BareNetworkString(
+                    decrypted + 1 + username.size(),
+                    decryption_size - username.size() - 1));
+                *real_online_name = username.c_str();
+                Log::info("ServerLobby", "%s validated.", username.c_str());
+            }
+        }
+        if (real_online_name->empty())
+        {
+            Log::error("ServerLobby", "%s validation failed.",
+                username.c_str());
+        }
+        free(decrypted);
+    }
+    else
+    {
+        irr::core::stringc error(request->getInfo().c_str());
+        Log::error("ServerLobby", "%s", error.c_str());
+    }
+    delete request;
+}   // decryptConnectionRequest
 
 //-----------------------------------------------------------------------------
 void ServerLobby::updatePlayerList()

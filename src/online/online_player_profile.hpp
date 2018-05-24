@@ -74,7 +74,6 @@ namespace Online
         virtual void signIn(bool success, const XMLNode * input);
         virtual void signOut(bool success, const XMLNode * input,
                             const irr::core::stringw &info);
-        virtual uint32_t getOnlineId() const;
         virtual void setUserDetails(Online::HTTPRequest *request,
                                     const std::string &action,
                                     const std::string &url_path = "") const;
@@ -96,9 +95,6 @@ namespace Online
             return m_online_state;
         }   // getOnlineState
 
-        // ----------------------------------------------------------------
-        /** Returns the session token of the signed in user. */
-        const std::string& getToken() const { return m_token; }
         virtual void requestSavedSession();
         virtual void requestSignOut();
         virtual void requestSignIn(const irr::core::stringw &username,
@@ -112,6 +108,11 @@ namespace Online
         /** Returns a pointer to the profile associated with the current user. */
         OnlineProfile* getProfile() const { return m_profile; }
         // ----------------------------------------------------------------
+        /** Returns the session token of the signed in user. */
+        const std::string& getToken() const { return m_token; }
+        // ----------------------------------------------------------------
+        virtual uint32_t getOnlineId() const;
+
     }; // class OnlinePlayerProfile
 } // namespace Online
 #endif // HEADER_CURRENT_ONLINE_USER_HPP

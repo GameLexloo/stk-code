@@ -25,6 +25,7 @@
 class GameSetup;
 class NetworkPlayerProfile;
 
+#include <array>
 #include <memory>
 #include <vector>
 
@@ -68,7 +69,8 @@ public:
         RR_BANNED = 1,
         RR_INCORRECT_PASSWORD = 2,
         RR_INCOMPATIBLE_DATA = 3,
-        RR_TOO_MANY_PLAYERS = 4
+        RR_TOO_MANY_PLAYERS = 4,
+        RR_INVALID_PLAYER = 5
     };
 
 protected:
@@ -80,15 +82,37 @@ protected:
     void configRemoteKart(
      const std::vector<std::shared_ptr<NetworkPlayerProfile> >& players) const;
 
+private:
+    uint8_t byteToInt(uint8_t input)
+    {
+        if (input >= '0' && input <= '9')
+            return input - '0';
+        if (input >= 'A' && input <= 'F')
+            return input - 'A' + 10;
+        if (input >= 'a' && input <= 'f')
+            return input - 'a' + 10;
+        throw std::invalid_argument("Invalid input string");
+    }
+    // ------------------------------------------------------------------------
+    void hexToBin(const char* src, uint8_t* target)
+    {
+        while (*src && src[1])
+        {
+            *(target++) = byteToInt(*src) * 16 + byteToInt(src[1]);
+            src += 2;
+        }
+    }
+
 public:
 
     /** Creates either a client or server lobby protocol as a singleton. */
-    template<typename singleton> static std::shared_ptr<singleton> create()
+    template<typename Singleton, typename... Types>
+        static std::shared_ptr<Singleton> create(Types ...args)
     {
         assert(m_lobby.expired());
-        auto ret = std::make_shared<singleton>();
+        auto ret = std::make_shared<Singleton>(args...);
         m_lobby = ret;
-        return std::dynamic_pointer_cast<singleton>(ret);
+        return std::dynamic_pointer_cast<Singleton>(ret);
     }   // create
 
     // ------------------------------------------------------------------------
@@ -115,6 +139,15 @@ public:
     virtual bool waitingForPlayers() const = 0;
     virtual bool allPlayersReady() const = 0;
     GameSetup* getGameSetup() const { return m_game_setup; }
+    // ------------------------------------------------------------------------
+    std::array<uint8_t, 16> getKeyFromToken(const std::string& token)
+    {
+        // From stk addons database
+        assert(token.size() == 24);
+        std::array<uint8_t, 16> key = std::array<uint8_t, 16>();
+        hexToBin(token.c_str(), key.data());
+        return key;
+    }
 
 };   // class LobbyProtocol
 

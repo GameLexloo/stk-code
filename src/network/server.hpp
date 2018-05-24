@@ -80,6 +80,10 @@ protected:
 
     /* WAN server only, distance based on IP latitude and longitude. */
     float m_distance;
+
+    /* WAN server only, true if hosted officially by stk team. */
+    bool m_official;
+
 public:
 
          /** Initialises the object from an XML node. */
@@ -123,6 +127,8 @@ public:
                                                 { return m_server_owner_name; }
     // ------------------------------------------------------------------------
     float getDistance() const                            { return m_distance; }
+    // ------------------------------------------------------------------------
+    bool isOfficial() const                              { return m_official; }
 
 };   // Server
 #endif // HEADER_SERVER_HPP

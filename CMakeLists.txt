@@ -221,6 +221,9 @@ if(NOT SERVER_ONLY)
     include_directories("${PROJECT_SOURCE_DIR}/lib/graphics_utils")
 endif()
 
+add_subdirectory("${PROJECT_SOURCE_DIR}/lib/xxtea-c")
+include_directories("${PROJECT_SOURCE_DIR}/lib/xxtea-c")
+
 if(NOT SERVER_ONLY)
     find_library(SQUISH_LIBRARY NAMES squish libsquish)
     find_path(SQUISH_INCLUDEDIR NAMES squish.h PATHS)
@@ -474,7 +477,7 @@ target_link_libraries(supertuxkart
     ${FREETYPE_LIBRARIES}
     ${JPEG_LIBRARIES}
     ${TURBOJPEG_LIBRARY}
-    #${VPX_LIBRARIES}
+    xxtea-c
     )
 
 if(NOT SERVER_ONLY)

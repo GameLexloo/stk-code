@@ -137,7 +137,7 @@ void RequestConnection::asynchronousUpdate()
             else
             {
                 m_request = new Online::XMLRequest();
-                NetworkConfig::get()->setUserDetails(m_request,
+                NetworkConfig::get()->setServerDetails(m_request,
                     "request-connection");
                 m_request->addParameter("server_id", m_server->getServerId());
                 m_request->queue();

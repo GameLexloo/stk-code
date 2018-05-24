@@ -126,6 +126,9 @@ private:
     }
     std::tuple<std::string, uint8_t, bool, bool> handleVote();
     void stopCurrentRace();
+    void decryptConnectionRequest(std::unique_ptr<BareNetworkString>& rest,
+                                  unsigned length, uint32_t online_id,
+                                  core::stringw* real_online_name);
 
 public:
              ServerLobby();

@@ -278,8 +278,8 @@ void ConnectToServer::update(int ticks)
             {
                 // Let main thread create ClientLobby for better
                 // synchronization with GUI
-                auto cl = LobbyProtocol::create<ClientLobby>();
-                cl->setAddress(m_server_address);
+                auto cl = LobbyProtocol::create<ClientLobby>(m_server_address,
+                    m_server);
                 cl->requestStart();
             }
             if (STKHost::get()->getPeerCount() == 0)
@@ -367,7 +367,7 @@ void ConnectToServer::registerWithSTKServer()
     // STK server.
     const TransportAddress& addr = STKHost::get()->getPublicAddress();
     Online::XMLRequest *request  = new Online::XMLRequest();
-    NetworkConfig::get()->setUserDetails(request, "set");
+    NetworkConfig::get()->setServerDetails(request, "set");
     request->addParameter("address", addr.getIP());
     request->addParameter("port", addr.getPort());
     request->addParameter("private_port", STKHost::get()->getPrivatePort());
