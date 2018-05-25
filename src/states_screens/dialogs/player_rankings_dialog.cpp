@@ -51,7 +51,7 @@ PlayerRankingsDialog::PlayerRankingsDialog(uint32_t online_id,
     if (m_rankings.empty())
         updateTopTen();
     else
-        addTopTen();
+        fillTopTenList();
 }   // PlayerRankingsDialog
 
 // -----------------------------------------------------------------------------
@@ -76,12 +76,11 @@ void PlayerRankingsDialog::beforeAddingWidgets()
 // -----------------------------------------------------------------------------
 void PlayerRankingsDialog::updatePlayerRanking()
 {
+    // ------------------------------------------------------------------------
     class UpdatePlayerRankingRequest : public XMLRequest
     {
-        // ------------------------------------------------------------------------
-        /** Callback for the request to send a friend invitation. Shows a
-         *  confirmation message and takes care of updating all the cached
-         *  information.
+        /** Callback for the request to update rank of a player. Shows his rank
+         *  and score.
          */
         virtual void callback()
         {
@@ -121,12 +120,11 @@ void PlayerRankingsDialog::updatePlayerRanking()
 // ----------------------------------------------------------------------------
 void PlayerRankingsDialog::updateTopTen()
 {
-    // ----------------------------------------------------------------
+    // ------------------------------------------------------------------------
     class UpdateTopTenRequest : public XMLRequest
     {
-        /** Callback for the request to accept a friend invitation. Shows a
-        *  confirmation message and takes care of updating all the cached
-        *  information.
+        /** Callback for the request to update top 10 players and update the
+         *  list.
         */
         virtual void callback()
         {
@@ -148,7 +146,7 @@ void PlayerRankingsDialog::updateTopTen()
                     players->getNode(i)->get("scores", &score);
                     prd->m_rankings.emplace_back(rank, user, score);
                 }
-                prd->addTopTen();
+                prd->fillTopTenList();
             }
         }   // callback
     public:
@@ -163,7 +161,7 @@ void PlayerRankingsDialog::updateTopTen()
 }   // updateTopTen
 
 // -----------------------------------------------------------------------------
-void PlayerRankingsDialog::addTopTen()
+void PlayerRankingsDialog::fillTopTenList()
 {
     m_top_ten->clear();
     for (auto& r : m_rankings)
@@ -177,7 +175,7 @@ void PlayerRankingsDialog::addTopTen()
             StringUtils::toWString(std::get<2>(r)), -1, 1, true));
         m_top_ten->addItem("rank", row);
     }
-}   // addTopTen
+}   // fillTopTenList
 
 // -----------------------------------------------------------------------------
 GUIEngine::EventPropagation

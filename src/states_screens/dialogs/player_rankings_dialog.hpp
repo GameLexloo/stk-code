@@ -65,7 +65,7 @@ private:
     // ------------------------------------------------------------------------
     void updateTopTen();
     // ------------------------------------------------------------------------
-    void addTopTen();
+    void fillTopTenList();
 
 public:
     PlayerRankingsDialog(uint32_t online_id, const core::stringw& name);
