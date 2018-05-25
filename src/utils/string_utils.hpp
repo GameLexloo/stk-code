@@ -114,7 +114,7 @@ namespace StringUtils
 
     // ------------------------------------------------------------------------
     /**
-     *  Replaces the first %s or %i/%d in the string with the first value
+     *  Replaces the first %s or %i/%d/%f in the string with the first value
      *  converted to a string), the 2nd %s or %d with the second value etc.
      *  So this is basically a simplified s(n)printf replacement, but doesn't
      *  do any fancy formatting (and no type checks either - so you can print
