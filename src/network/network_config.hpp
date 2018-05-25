@@ -267,7 +267,8 @@ public:
     // ------------------------------------------------------------------------
     /** Returns if the server use multi-session rankings. */
     bool isRankedServer() const { return m_is_ranked_server; }
-
+    // ------------------------------------------------------------------------
+    void setRankedServer(bool val) { m_is_ranked_server = val; }
     // ------------------------------------------------------------------------
     /** Returns the minor and majar game mode from server database id. */
     std::pair<RaceManager::MinorRaceModeType, RaceManager::MajorRaceModeType>

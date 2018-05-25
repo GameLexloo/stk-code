@@ -598,6 +598,9 @@ void cmdLineHelp()
     "       --disable-lan      Disable LAN detection (connect using WAN).\n"
     "       --auto-connect     Automatically connect to fist server and start race\n"
     "       --max-players=n    Maximum number of clients (server only).\n"
+    "       --motd             Message showing in all lobby of clients.\n"
+    "       --ranked           Server will submit ranking to stk addons server.\n"
+    "                          You require permission for that.\n"
     "       --no-console-log   Does not write messages in the console but to\n"
     "                          stdout.log.\n"
     "  -h,  --help             Show this help.\n"
@@ -1063,7 +1066,10 @@ int handleCmdLine()
         core::stringw motd = StringUtils::xmlDecode(s);
         NetworkConfig::get()->setMOTD(motd);
     }
-
+    if (CommandLine::has("--ranked"))
+    {
+        NetworkConfig::get()->setRankedServer(true);
+    }
     if (CommandLine::has("--server-id-file", &s))
     {
         NetworkConfig::get()->setServerIdFile(

@@ -79,15 +79,23 @@ private:
     TransportAddress m_server_address;
 
     /* Ranking related variables */
-
     // If updating the base points, update the base points distribution in DB
-    const float BASE_RANKING_POINTS   = 4000.0f;
-    const float MAX_SCALING_TIME      = 600.0f;
-    const float MAX_POINTS_PER_SECOND = 0.125f;
+    const double BASE_RANKING_POINTS   = 4000.0;
+    const double MAX_SCALING_TIME      = 600.0;
+    const double MAX_POINTS_PER_SECOND = 0.125;
 
-    std::vector<double>       m_rankings; // TODO : convert from and to int when communicating with the server. Think to round it correctly
-    std::vector<unsigned int> m_num_ranked_races;
-    std::vector<double>       m_max_ranking;
+    /** Multi-session ranking scores for each current player */
+    std::map<uint32_t, double> m_scores;
+
+    /** The maximum ranking scores achieved for each current player */
+    std::map<uint32_t, double> m_max_scores;
+
+    /** Number of ranked races done for each current players */
+    std::map<uint32_t, unsigned> m_num_ranked_races;
+
+    /** Online id of disconnected player in ranked server
+     *  will be cleared when any new player connecting */
+    std::vector<uint32_t> m_disconnected_ranked_online_id;
 
     // connection management
     void clientDisconnected(Event* event);
@@ -140,12 +148,14 @@ private:
     void decryptConnectionRequest(std::unique_ptr<BareNetworkString>& rest,
                                   unsigned length, uint32_t online_id,
                                   core::stringw* real_online_name);
-
+    void getRankingForPlayer(uint32_t id);
+    void submitRankingsToAddons();
     void computeNewRankings();
-    float computeRankingFactor(unsigned int player_id);
-    float distributeBasePoints(unsigned int player_id);
-    float getModeFactor();
-    float getModeSpread();
+    void clearDisconnectedRankedPlayer();
+    double computeRankingFactor(unsigned int online_id);
+    double distributeBasePoints(unsigned int online_id);
+    double getModeFactor();
+    double getModeSpread();
 
 public:
              ServerLobby();

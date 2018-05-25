@@ -91,6 +91,12 @@ ServerLobby::ServerLobby() : LobbyProtocol(NULL)
     setHandleDisconnections(true);
     m_state = SET_PUBLIC_ADDRESS;
     updateBanList();
+    if (NetworkConfig::get()->isRankedServer())
+    {
+        Log::info("ServerLobby", "This server will submit ranking scores to "
+            "STK addons server, don't bother host one if you don't have the "
+            "corresponding permission, they will be rejected if so.");
+    }
 }   // ServerLobby
 
 //-----------------------------------------------------------------------------
@@ -403,6 +409,12 @@ void ServerLobby::update(int ticks)
             stopCurrentRace();
         }
         std::lock_guard<std::mutex> lock(m_connection_mutex);
+
+        clearDisconnectedRankedPlayer();
+        m_scores.clear();
+        m_max_scores.clear();
+        m_num_ranked_races.clear();
+
         m_game_setup->stopGrandPrix();
         m_state = NetworkConfig::get()->isLAN() ?
             ACCEPTING_CLIENTS : REGISTER_SELF_ADDRESS;
@@ -752,15 +764,22 @@ void ServerLobby::checkRaceFinished()
             total->addUInt32(last_score).addUInt32(cur_score)
                 .addFloat(overall_time);            
         }
-
-        if (NetworkConfig::get()->isRankedServer())
-            computeNewRankings();
     }
     else if (race_manager->modeHasLaps())
     {
         int fastest_lap =
             static_cast<LinearWorld*>(World::getWorld())->getFastestLapTicks();
         total->addUInt32(fastest_lap);
+    }
+    if (NetworkConfig::get()->isRankedServer())
+    {
+        computeNewRankings();
+        if (!m_game_setup->isGrandPrix() ||
+            m_game_setup->isGrandPrixFinished())
+        {
+            // For GP only sumbit ranking at the end of it
+            submitRankingsToAddons();
+        }
     }
 
     stopCurrentRace();
@@ -775,85 +794,79 @@ void ServerLobby::checkRaceFinished()
 }   // checkRaceFinished
 
 //-----------------------------------------------------------------------------
-/** Compute the new player's rankings in ranked servers
- *  //FIXME : this function assumes that m_rankings,
- *            m_num_ranked_races and m_max_ranking
- *            are correctly filled before
- *            It also assumes that the data stored by them
- *            is written back to the main list after the GP
+/** Compute the new player's rankings used in ranked servers
  */
 void ServerLobby::computeNewRankings()
 {
-    auto players = m_game_setup->getConnectedPlayers(true/*same_index_for_disconnected*/);
-
-    assert (m_rankings.size()          == players.size() &&
-            m_num_ranked_races.size()  == players.size() &&
-            m_max_ranking.size()       == players.size() );
-
-    // No ranking yet for battle mode
-    // TODO : separate rankings for time-trial and normal ??
+    // No ranking for battle mode
     if (!race_manager->modeHasLaps())
         return;
 
     // Using a vector of vector, it would be possible to fill
     // all j < i v[i][j] with -v[j][i]
     // Would this be worth it ?
-    std::vector<double> ranking_change;
+    std::vector<double> scores_change;
+    std::vector<double> new_scores;
 
+    auto players = m_game_setup->getPlayers();
     for (unsigned i = 0; i < players.size(); i++)
     {
-        m_rankings[i] += distributeBasePoints(i);
+        const uint32_t id = race_manager->getKartInfo(i).getOnlineId();
+        new_scores.push_back(m_scores.at(id));
+        new_scores[i] += distributeBasePoints(id);
     }
 
     for (unsigned i = 0; i < players.size(); i++)
     {
-        ranking_change.push_back(0);
+        scores_change.push_back(0);
 
-        int player1_ranking = m_rankings[i];
-
+        double player1_scores = new_scores[i];
         // If the player has quitted before the race end,
         // the value will be incorrect, but it will not be used
-        float player1_time  = race_manager->getKartRaceTime(i);
-        float player1_factor = computeRankingFactor(i);
+        double player1_time  = race_manager->getKartRaceTime(i);
+        double player1_factor =
+            computeRankingFactor(race_manager->getKartInfo(i).getOnlineId());
 
-        for (unsigned j = 0; j < players.size(); i++)
+        for (unsigned j = 0; j < players.size(); j++)
         {
             // Don't compare a player with itself
             if (i == j)
                 continue;
 
-            double result = 0.0f;
-            double expected_result = 0.0f;
-            double ranking_importance = 0.0f;
+            double result = 0.0;
+            double expected_result = 0.0;
+            double ranking_importance = 0.0;
 
             // No change between two quitting players
-            if (!players[i] && !players[j])
+            if (players[i].expired() && players[j].expired())
                 continue;
 
-            int player2_ranking = m_rankings[j];
-            float player2_time  = race_manager->getKartRaceTime(j);
+            double player2_scores = new_scores[j];
+            double player2_time = race_manager->getKartRaceTime(j);
 
             // Compute the expected result using an ELO-like function
-            double diff = (double) player2_ranking - player1_ranking;
-            expected_result = 1.0f/(1.0f+std::pow(10.0f, diff/(BASE_RANKING_POINTS*getModeSpread()/(2.0f))));
+            double diff = player2_scores - player1_scores;
+            expected_result = 1.0/ (1.0 + std::pow(10.0,
+                diff / (BASE_RANKING_POINTS * getModeSpread() / 2.0)));
 
             // Compute the result and race ranking importance
-            float player_factors = std::max(player1_factor,
-                                            computeRankingFactor(j) );
-         
-            float mode_factor = getModeFactor();
+            double player_factors = std::max(player1_factor,
+                computeRankingFactor(
+                race_manager->getKartInfo(j).getOnlineId()));
 
-            if (!players[i])
+            double mode_factor = getModeFactor();
+
+            if (players[i].expired())
             {
-                result = 0.0f;
-                ranking_importance =
-                    mode_factor*MAX_SCALING_TIME*MAX_POINTS_PER_SECOND*player_factors;
+                result = 0.0;
+                ranking_importance = mode_factor *
+                    MAX_SCALING_TIME * MAX_POINTS_PER_SECOND * player_factors;
             }
-            else if (!players[j])
+            else if (players[j].expired())
             {
-                result = 1.0f;
-                ranking_importance =
-                    mode_factor*MAX_SCALING_TIME*MAX_POINTS_PER_SECOND*player_factors;
+                result = 1.0;
+                ranking_importance = mode_factor *
+                    MAX_SCALING_TIME * MAX_POINTS_PER_SECOND * player_factors;
             }
             else
             {
@@ -861,88 +874,95 @@ void ServerLobby::computeNewRankings()
                 // Otherwise, it is averaged between 0 and 1.
                 if (player1_time <= player2_time)
                 {
-                    result = (player2_time - player1_time)/(player1_time/20);
-                    result = std::min( (double) 1.0f, 0.5f + result);
+                    result =
+                        (player2_time - player1_time) / (player1_time / 20.0);
+                    result = std::min(1.0, 0.5 + result);
                 }
                 else
                 {
-                    result = (player1_time - player2_time)/(player2_time/20);
-                    result = std::max( (double) 0.0f, 0.5f - result);
+                    result =
+                        (player1_time - player2_time) / (player2_time / 20.0);
+                    result = std::max(0.0, 0.5 - result);
                 }
-                ranking_importance = mode_factor * std::min ( std::max (player1_time, player2_time),
-                                                MAX_SCALING_TIME ) * MAX_POINTS_PER_SECOND * player_factors;
+                ranking_importance = mode_factor *
+                    std::min(
+                    std::max(player1_time, player2_time), MAX_SCALING_TIME) *
+                    MAX_POINTS_PER_SECOND * player_factors;
             }
             // Compute the ranking change
-            ranking_change[i] += ranking_importance * (result - expected_result);
+            scores_change[i] +=
+                ranking_importance * (result - expected_result);
         }
     }
 
-    // Don't merge it in the main loop as m_rankings value are used there
+    // Don't merge it in the main loop as new_scores value are used there
     for (unsigned i = 0; i < players.size(); i++)
     {
-        m_rankings[i] += ranking_change[i];
+        // Skip disconnected player
+        if (players[i].expired())
+            continue;
 
-        if (m_rankings[i] > m_max_ranking[i])
-            m_max_ranking[i] = m_rankings[i];
-        m_num_ranked_races[i]++;
+        new_scores[i] += scores_change[i];
+        const uint32_t id = race_manager->getKartInfo(i).getOnlineId();
+        m_scores.at(id) =  new_scores[i];
+        if (m_scores.at(id) > m_max_scores.at(id))
+            m_max_scores.at(id) = m_scores.at(id);
+        m_num_ranked_races.at(id)++;
     }
-} //computeNewRankings
+}   // computeNewRankings
 
 //-----------------------------------------------------------------------------
 /** Compute the ranking factor, used to make top rankings more stable
  *  and to allow new players to faster get to an appropriate ranking
  */
-float ServerLobby::computeRankingFactor(unsigned int player_id)
+double ServerLobby::computeRankingFactor(unsigned int online_id)
 {
-    double max_points = m_max_ranking[player_id];
-    int num_races  = m_num_ranked_races[player_id];
+    double max_points = m_max_scores.at(online_id);
+    unsigned num_races = m_num_ranked_races.at(online_id);
 
-    if (     max_points >= (BASE_RANKING_POINTS * 2.0f))
-        return 0.4f;
-    else if (max_points >= (BASE_RANKING_POINTS * 1.75f)  || num_races > 500)
-        return 0.5f;
-    else if (max_points >= (BASE_RANKING_POINTS * 1.5f)   || num_races > 250)
-        return 0.6f;
-    else if (max_points >= (BASE_RANKING_POINTS * 1.25f)  || num_races > 100)
-        return 0.7f;
+    if (max_points >= (BASE_RANKING_POINTS * 2.0))
+        return 0.4;
+    else if (max_points >= (BASE_RANKING_POINTS * 1.75) || num_races > 500)
+        return 0.5;
+    else if (max_points >= (BASE_RANKING_POINTS * 1.5) || num_races > 250)
+        return 0.6;
+    else if (max_points >= (BASE_RANKING_POINTS * 1.25) || num_races > 100)
+        return 0.7;
     // The base ranking points are not distributed all at once
     // So it's not guaranteed a player reach them
-    else if (max_points >= (BASE_RANKING_POINTS        )  || num_races > 50)
-        return 0.8f;
+    else if (max_points >= (BASE_RANKING_POINTS) || num_races > 50)
+        return 0.8;
     else
-        return 1.0f; 
+        return 1.0;
 
-} //computeRankingFactor
+}   // computeRankingFactor
 
 //-----------------------------------------------------------------------------
 /** Returns the mode race importance factor,
  *  used to make ranking move slower in more random modes.
  */
-float ServerLobby::getModeFactor()
+double ServerLobby::getModeFactor()
 {
     if (race_manager->isTimeTrialMode())
-        return 1.0f;
-
-    //else
-    return 0.4f;
-}
+        return 1.0;
+    return 0.4;
+}   // getModeFactor
 
 //-----------------------------------------------------------------------------
 /** Returns the mode spread factor, used so that a similar difference in
  *  skill will result in a similar ranking difference in more random modes.
  */
-float ServerLobby::getModeSpread()
+double ServerLobby::getModeSpread()
 {
     if (race_manager->isTimeTrialMode())
-        return 1.0f;
+        return 1.0;
 
-    //else
-    //TODO : the value used here for normal races is a wild guess.
+    //TODO: the value used here for normal races is a wild guess.
     // When hard data to the spread tendencies of time-trial
     // and normal mode becomes available, update this to make
     // the spreads more comparable
-    return 1.4f;
-}
+    return 1.4;
+}   // getModeSpread
 
 //-----------------------------------------------------------------------------
 /** Manages the distribution of the base points.
@@ -951,14 +971,18 @@ float ServerLobby::getModeSpread()
  *  The first half is distributed when the player enters
  *  for the first time in the ranked server.
  */
-float ServerLobby::distributeBasePoints(unsigned int player_id)
+double ServerLobby::distributeBasePoints(unsigned int online_id)
 {
-    int num_races  = m_num_ranked_races[player_id];
+    int num_races  = m_num_ranked_races.at(online_id);
     if (num_races < 45)
-        return (BASE_RANKING_POINTS/2000.0f * std::max((45-num_races),4)*2.0f);
+    {
+        return
+            (BASE_RANKING_POINTS / 2000.0 * std::max((45 - num_races), 4) *
+            2.0);
+    }
     else
         return 0.0f;
-}
+}   // distributeBasePoints
 
 //-----------------------------------------------------------------------------
 /** Stop any race currently in server, should only be called in main thread.
@@ -997,6 +1021,12 @@ void ServerLobby::clientDisconnected(Event* event)
     msg->addUInt8((uint8_t)players_on_peer.size());
     for (auto p : players_on_peer)
     {
+        if (NetworkConfig::get()->isRankedServer())
+        {
+            // Have to be clean after a race is done as the ranking formula
+            // requires all player info
+            m_disconnected_ranked_online_id.push_back(p->getOnlineId());
+        }
         std::string name = StringUtils::wideToUtf8(p->getName());
         msg->encodeString(name);
         Log::info("ServerLobby", "%s disconnected", name.c_str());
@@ -1005,6 +1035,18 @@ void ServerLobby::clientDisconnected(Event* event)
     updatePlayerList();
     delete msg;
 }   // clientDisconnected
+
+//-----------------------------------------------------------------------------
+void ServerLobby::clearDisconnectedRankedPlayer()
+{
+    for (auto id : m_disconnected_ranked_online_id)
+    {
+        m_scores.erase(id);
+        m_max_scores.erase(id);
+        m_num_ranked_races.erase(id);
+    }
+    m_disconnected_ranked_online_id.clear();
+}   // clearDisconnectedRankedPlayer
 
 //-----------------------------------------------------------------------------
 
@@ -1257,6 +1299,11 @@ void ServerLobby::connectionRequested(Event* event)
             npp->getOnlineId(), peer->getAddress().toString().c_str());
     }
     updatePlayerList();
+    if (NetworkConfig::get()->isRankedServer())
+    {
+        clearDisconnectedRankedPlayer();
+        getRankingForPlayer(online_id);
+    }
 }   // connectionRequested
 
 //-----------------------------------------------------------------------------
@@ -1671,3 +1718,76 @@ bool ServerLobby::waitingForPlayers() const
         !m_game_setup->isGrandPrixStarted();
 }   // waitingForPlayers
 
+//-----------------------------------------------------------------------------
+void ServerLobby::getRankingForPlayer(uint32_t id)
+{
+    Online::XMLRequest* request = new Online::XMLRequest();
+    NetworkConfig::get()->setUserDetails(request, "get-ranking");
+
+    request->addParameter("id", id);
+    request->executeNow();
+
+    const XMLNode* result = request->getXMLData();
+    std::string rec_success;
+
+    // Default result
+    double score = 2000.0;
+    double max_score = 2000.0;
+    unsigned num_races = 0;
+    if (result->get("success", &rec_success))
+    {
+        if (rec_success == "yes")
+        {
+            result->get("scores", &score);
+            result->get("max-scores", &max_score);
+            result->get("num-races-done", &num_races);
+        }
+        else
+        {
+            Log::error("ServerLobby", "No ranking info found.");
+        }
+    }
+    else
+    {
+        Log::error("ServerLobby", "No ranking info found.");
+    }
+    m_scores[id] = score;
+    m_max_scores[id] = max_score;
+    m_num_ranked_races[id] = num_races;
+    delete request;
+}   // getRankingForPlayer
+
+//-----------------------------------------------------------------------------
+void ServerLobby::submitRankingsToAddons()
+{
+    // --------------------------------------------------------------------
+    class SumbitRankingRequest : public Online::XMLRequest
+    {
+    public:
+        SumbitRankingRequest(uint32_t online_id, double scores,
+                             double max_scores, unsigned num_races)
+            : XMLRequest(true)
+        {
+            addParameter("id", online_id);
+            addParameter("scores", scores);
+            addParameter("max-scores", max_scores);
+            addParameter("num-races-done", num_races);
+        }
+    };   // UpdatePlayerRankingRequest
+    // --------------------------------------------------------------------
+
+    auto players = m_game_setup->getConnectedPlayers();
+    for (auto& player : players)
+    {
+        const uint32_t id = player->getOnlineId();
+        SumbitRankingRequest* request = new SumbitRankingRequest
+            (id, m_scores.at(id), m_max_scores.at(id),
+            m_num_ranked_races.at(id));
+        NetworkConfig::get()->setUserDetails(request, "submit-ranking");
+        Log::info("ServerLobby", "Submiting ranking for %s (%d) : %lf, %lf %d",
+            StringUtils::wideToUtf8(player->getName()).c_str(),
+            id, m_scores.at(id), m_max_scores.at(id),
+            m_num_ranked_races.at(id));
+        request->queue();
+    }
+}   // submitRankingsToAddons
