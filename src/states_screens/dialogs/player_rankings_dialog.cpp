@@ -42,14 +42,15 @@ std::vector<std::tuple<int, core::stringw, float> >
 PlayerRankingsDialog::PlayerRankingsDialog(uint32_t online_id,
                                            const core::stringw& name)
                     : ModalDialog(0.8f,0.9f), m_online_id(online_id),
-                      m_name(name), m_self_destroy(false)
+                      m_name(name), m_self_destroy(false),
+                      m_fetched_ranking(std::make_shared<bool>(false))
 {
     loadFromFile("online/player_rankings_dialog.stkgui");
     m_top_ten = getWidget<ListWidget>("top-ten");
     assert(m_top_ten != NULL);
 
     if (m_rankings.empty())
-        updateTopTen();
+        updateTopTenList();
     else
         fillTopTenList();
 }   // PlayerRankingsDialog
@@ -67,58 +68,12 @@ void PlayerRankingsDialog::beforeAddingWidgets()
 
     m_ranking_info = getWidget<LabelWidget>("cur-rank");
     assert(m_ranking_info != NULL);
-    core::stringw fetching = _("Fetching ranking info for %s.", m_name);
-    m_ranking_info->setText(fetching, false);
-    updatePlayerRanking();
-
+    updatePlayerRanking(m_name, m_online_id, m_ranking_info,
+        m_fetched_ranking);
 }   // beforeAddingWidgets
 
-// -----------------------------------------------------------------------------
-void PlayerRankingsDialog::updatePlayerRanking()
-{
-    // ------------------------------------------------------------------------
-    class UpdatePlayerRankingRequest : public XMLRequest
-    {
-        /** Callback for the request to update rank of a player. Shows his rank
-         *  and score.
-         */
-        virtual void callback()
-        {
-            PlayerRankingsDialog* prd = dynamic_cast<PlayerRankingsDialog*>
-                (getCurrent());
-            if (prd == NULL)
-                return;
-            core::stringw result = _("%s has no ranking yet.", prd->m_name);
-            if (isSuccess())
-            {
-                int rank = -1;
-                float score = 0.0;
-                getXMLData()->get("rank", &rank);
-                getXMLData()->get("scores", &score);
-                if (rank > 0)
-                {
-                    result = _("%s has a rank of %d with score %d.",
-                        prd->m_name, rank, (int)score);
-                }
-            }
-            prd->m_ranking_info->setText(result, false);
-
-        }   // callback
-    public:
-        UpdatePlayerRankingRequest() : XMLRequest(true) {}
-    };   // UpdatePlayerRankingRequest
-
-    // ------------------------------------------------------------------------
-
-    UpdatePlayerRankingRequest* request = new UpdatePlayerRankingRequest();
-    PlayerManager::setUserDetails(request, "get-ranking");
-    request->addParameter("id", m_online_id);
-    request->queue();
-
-}   // updatePlayerRanking
-
 // ----------------------------------------------------------------------------
-void PlayerRankingsDialog::updateTopTen()
+void PlayerRankingsDialog::updateTopTenList()
 {
     // ------------------------------------------------------------------------
     class UpdateTopTenRequest : public XMLRequest
@@ -158,7 +113,7 @@ void PlayerRankingsDialog::updateTopTen()
     PlayerManager::setUserDetails(request, "top-players");
     request->addParameter("ntop", 10);
     request->queue();
-}   // updateTopTen
+}   // updateTopTenList
 
 // -----------------------------------------------------------------------------
 void PlayerRankingsDialog::fillTopTenList()
@@ -176,6 +131,27 @@ void PlayerRankingsDialog::fillTopTenList()
         m_top_ten->addItem("rank", row);
     }
 }   // fillTopTenList
+
+// -----------------------------------------------------------------------------
+void PlayerRankingsDialog::onUpdate(float dt)
+{
+    if (*m_fetched_ranking == false)
+    {
+        // I18N: In the network player dialog, showing when waiting for
+        // the result of the ranking info of a player
+        core::stringw fetching =
+            StringUtils::loadingDots(_("Fetching ranking info for %s.",
+            m_name));
+        m_ranking_info->setText(fetching, false);
+    }
+
+    // It's unsafe to delete from inside the event handler so we do it here
+    if (m_self_destroy)
+    {
+        ModalDialog::dismiss();
+        return;
+    }
+}   // onUpdate
 
 // -----------------------------------------------------------------------------
 GUIEngine::EventPropagation
@@ -199,8 +175,10 @@ GUIEngine::EventPropagation
                 return GUIEngine::EVENT_BLOCK;
 
             timer = StkTime::getRealTime();
-            updatePlayerRanking();
-            updateTopTen();
+            *m_fetched_ranking = false;
+            updatePlayerRanking(m_name, m_online_id, m_ranking_info,
+                m_fetched_ranking);
+            updateTopTenList();
             return GUIEngine::EVENT_BLOCK;
         }
     }
