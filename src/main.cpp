@@ -599,6 +599,7 @@ void cmdLineHelp()
     "       --auto-connect     Automatically connect to fist server and start race\n"
     "       --max-players=n    Maximum number of clients (server only).\n"
     "       --motd             Message showing in all lobby of clients.\n"
+    "       --validation-only  Only validated player is allowed to join thie server.\n"
     "       --ranked           Server will submit ranking to stk addons server.\n"
     "                          You require permission for that.\n"
     "       --no-console-log   Does not write messages in the console but to\n"
@@ -1066,8 +1067,13 @@ int handleCmdLine()
         core::stringw motd = StringUtils::xmlDecode(s);
         NetworkConfig::get()->setMOTD(motd);
     }
+    if (CommandLine::has("--validation-only"))
+    {
+        NetworkConfig::get()->setValidatedPlayers(true);
+    }
     if (CommandLine::has("--ranked"))
     {
+        NetworkConfig::get()->setValidatedPlayers(true);
         NetworkConfig::get()->setRankedServer(true);
     }
     if (CommandLine::has("--server-id-file", &s))

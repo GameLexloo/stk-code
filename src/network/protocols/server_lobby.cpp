@@ -297,6 +297,7 @@ void ServerLobby::asynchronousUpdate()
     }
     case ACCEPTING_CLIENTS:
     {
+        clearDisconnectedRankedPlayer();
         // Only poll the STK server if this is a WAN server.
         if (NetworkConfig::get()->isWAN())
             checkIncomingConnectionRequests();
@@ -409,12 +410,6 @@ void ServerLobby::update(int ticks)
             stopCurrentRace();
         }
         std::lock_guard<std::mutex> lock(m_connection_mutex);
-
-        clearDisconnectedRankedPlayer();
-        m_scores.clear();
-        m_max_scores.clear();
-        m_num_ranked_races.clear();
-
         m_game_setup->stopGrandPrix();
         m_state = NetworkConfig::get()->isLAN() ?
             ACCEPTING_CLIENTS : REGISTER_SELF_ADDRESS;
@@ -818,7 +813,7 @@ void ServerLobby::computeNewRankings()
 
     for (unsigned i = 0; i < players.size(); i++)
     {
-        scores_change.push_back(0);
+        scores_change.push_back(0.0);
 
         double player1_scores = new_scores[i];
         // If the player has quitted before the race end,
@@ -829,7 +824,7 @@ void ServerLobby::computeNewRankings()
 
         for (unsigned j = 0; j < players.size(); j++)
         {
-            // Don't compare a player with itself
+            // Don't compare a player with himself
             if (i == j)
                 continue;
 
@@ -915,7 +910,7 @@ void ServerLobby::computeNewRankings()
 /** Compute the ranking factor, used to make top rankings more stable
  *  and to allow new players to faster get to an appropriate ranking
  */
-double ServerLobby::computeRankingFactor(unsigned int online_id)
+double ServerLobby::computeRankingFactor(uint32_t online_id)
 {
     double max_points = m_max_scores.at(online_id);
     unsigned num_races = m_num_ranked_races.at(online_id);
@@ -971,17 +966,17 @@ double ServerLobby::getModeSpread()
  *  The first half is distributed when the player enters
  *  for the first time in the ranked server.
  */
-double ServerLobby::distributeBasePoints(unsigned int online_id)
+double ServerLobby::distributeBasePoints(uint32_t online_id)
 {
-    int num_races  = m_num_ranked_races.at(online_id);
+    unsigned num_races  = m_num_ranked_races.at(online_id);
     if (num_races < 45)
     {
         return
-            (BASE_RANKING_POINTS / 2000.0 * std::max((45 - num_races), 4) *
+            (BASE_RANKING_POINTS / 2000.0 * std::max((45u - num_races), 4u) *
             2.0);
     }
     else
-        return 0.0f;
+        return 0.0;
 }   // distributeBasePoints
 
 //-----------------------------------------------------------------------------
@@ -1021,12 +1016,6 @@ void ServerLobby::clientDisconnected(Event* event)
     msg->addUInt8((uint8_t)players_on_peer.size());
     for (auto p : players_on_peer)
     {
-        if (NetworkConfig::get()->isRankedServer())
-        {
-            // Have to be clean after a race is done as the ranking formula
-            // requires all player info
-            m_disconnected_ranked_online_id.push_back(p->getOnlineId());
-        }
         std::string name = StringUtils::wideToUtf8(p->getName());
         msg->encodeString(name);
         Log::info("ServerLobby", "%s disconnected", name.c_str());
@@ -1039,13 +1028,21 @@ void ServerLobby::clientDisconnected(Event* event)
 //-----------------------------------------------------------------------------
 void ServerLobby::clearDisconnectedRankedPlayer()
 {
-    for (auto id : m_disconnected_ranked_online_id)
+    for (auto it = m_ranked_players.begin(); it != m_ranked_players.end();)
     {
-        m_scores.erase(id);
-        m_max_scores.erase(id);
-        m_num_ranked_races.erase(id);
+        if (it->second.expired())
+        {
+            const uint32_t id = it->first;
+            m_scores.erase(id);
+            m_max_scores.erase(id);
+            m_num_ranked_races.erase(id);
+            it = m_ranked_players.erase(it);
+        }
+        else
+        {
+            it++;
+        }
     }
-    m_disconnected_ranked_online_id.clear();
 }   // clearDisconnectedRankedPlayer
 
 //-----------------------------------------------------------------------------
@@ -1131,8 +1128,15 @@ void ServerLobby::connectionRequested(Event* event)
         rest->decodeStringW(&online_name);
     }
 
-    // Failed decryption if online_name is empty
-    if (decryption_length > 0 && online_name.empty())
+    unsigned player_count = rest->getUInt8();
+    // Failed decryption if online_name is empty, reject non-valiated
+    // player joinning if necessary. And no duplicated online id or split
+    // screen players in ranked server
+    if ((decryption_length > 0 && online_name.empty()) ||
+        ((decryption_length == 0 || online_name.empty()) &&
+        NetworkConfig::get()->onlyValidatedPlayers()) ||
+        ((player_count != 1 || m_scores.find(online_id) != m_scores.end()) &&
+        NetworkConfig::get()->isRankedServer()))
     {
         NetworkString *message = getNetworkString(2);
         message->addUInt8(LE_CONNECTION_REFUSED).addUInt8(RR_INVALID_PLAYER);
@@ -1143,7 +1147,6 @@ void ServerLobby::connectionRequested(Event* event)
         return;
     }
 
-    unsigned player_count = rest->getUInt8();
     if (m_game_setup->getPlayerCount() + player_count >
         NetworkConfig::get()->getMaxPlayers())
     {
@@ -1158,13 +1161,13 @@ void ServerLobby::connectionRequested(Event* event)
 
     for (unsigned i = 0; i < player_count; i++)
     {
-        core::stringw name;
-        rest->decodeStringW(&name);
+        core::stringw offline_name;
+        rest->decodeStringW(&offline_name);
         float default_kart_color = rest->getFloat();
         PerPlayerDifficulty per_player_difficulty =
             (PerPlayerDifficulty)rest->getUInt8();
         peer->addPlayer(std::make_shared<NetworkPlayerProfile>
-            (peer, i == 0 && !online_name.empty() ? online_name : name,
+            (peer, i == 0 && !online_name.empty() ? online_name : offline_name,
             peer->getHostId(), default_kart_color, i == 0 ? online_id : 0,
             per_player_difficulty, (uint8_t)i));
     }
@@ -1301,8 +1304,7 @@ void ServerLobby::connectionRequested(Event* event)
     updatePlayerList();
     if (NetworkConfig::get()->isRankedServer())
     {
-        clearDisconnectedRankedPlayer();
-        getRankingForPlayer(online_id);
+        getRankingForPlayer(peer->getPlayerProfiles()[0]);
     }
 }   // connectionRequested
 
@@ -1719,11 +1721,12 @@ bool ServerLobby::waitingForPlayers() const
 }   // waitingForPlayers
 
 //-----------------------------------------------------------------------------
-void ServerLobby::getRankingForPlayer(uint32_t id)
+void ServerLobby::getRankingForPlayer(std::shared_ptr<NetworkPlayerProfile> p)
 {
     Online::XMLRequest* request = new Online::XMLRequest();
     NetworkConfig::get()->setUserDetails(request, "get-ranking");
 
+    const uint32_t id = p->getOnlineId();
     request->addParameter("id", id);
     request->executeNow();
 
@@ -1751,6 +1754,7 @@ void ServerLobby::getRankingForPlayer(uint32_t id)
     {
         Log::error("ServerLobby", "No ranking info found.");
     }
+    m_ranked_players[id] = p;
     m_scores[id] = score;
     m_max_scores[id] = max_score;
     m_num_ranked_races[id] = num_races;
@@ -1760,6 +1764,10 @@ void ServerLobby::getRankingForPlayer(uint32_t id)
 //-----------------------------------------------------------------------------
 void ServerLobby::submitRankingsToAddons()
 {
+    // No ranking for battle mode
+    if (!race_manager->modeHasLaps())
+        return;
+
     // --------------------------------------------------------------------
     class SumbitRankingRequest : public Online::XMLRequest
     {

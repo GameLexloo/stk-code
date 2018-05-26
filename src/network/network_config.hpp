@@ -90,6 +90,9 @@ private:
      *  immediately start a race. */
     bool m_auto_connect;
 
+    /** True if only validated players are allowed to join. */
+    bool m_validated_players;
+
     bool m_done_adding_network_players;
 
     /** If this is a server, the server name. */
@@ -304,6 +307,10 @@ public:
     core::stringw getModeName(unsigned id);
     // ------------------------------------------------------------------------
     std::vector<GUIEngine::Screen*> getResetScreens(bool lobby = false) const;
+    // ------------------------------------------------------------------------
+    void setValidatedPlayers(bool val)           { m_validated_players = val; }
+    // ------------------------------------------------------------------------
+    bool onlyValidatedPlayers() const           { return m_validated_players; }
 
 };   // class NetworkConfig
 

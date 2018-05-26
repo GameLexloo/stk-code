@@ -12,6 +12,7 @@
 #include <set>
 #include <tuple>
 
+class NetworkPlayerProfile;
 class STKPeer;
 
 class ServerLobby : public LobbyProtocol
@@ -84,6 +85,9 @@ private:
     const double MAX_SCALING_TIME      = 600.0;
     const double MAX_POINTS_PER_SECOND = 0.125;
 
+    /** Online id to profile map, handling disconnection in ranked server */
+    std::map<uint32_t, std::weak_ptr<NetworkPlayerProfile> > m_ranked_players;
+
     /** Multi-session ranking scores for each current player */
     std::map<uint32_t, double> m_scores;
 
@@ -92,10 +96,6 @@ private:
 
     /** Number of ranked races done for each current players */
     std::map<uint32_t, unsigned> m_num_ranked_races;
-
-    /** Online id of disconnected player in ranked server
-     *  will be cleared when any new player connecting */
-    std::vector<uint32_t> m_disconnected_ranked_online_id;
 
     // connection management
     void clientDisconnected(Event* event);
@@ -148,12 +148,12 @@ private:
     void decryptConnectionRequest(std::unique_ptr<BareNetworkString>& rest,
                                   unsigned length, uint32_t online_id,
                                   core::stringw* real_online_name);
-    void getRankingForPlayer(uint32_t id);
+    void getRankingForPlayer(std::shared_ptr<NetworkPlayerProfile> p);
     void submitRankingsToAddons();
     void computeNewRankings();
     void clearDisconnectedRankedPlayer();
-    double computeRankingFactor(unsigned int online_id);
-    double distributeBasePoints(unsigned int online_id);
+    double computeRankingFactor(uint32_t online_id);
+    double distributeBasePoints(uint32_t online_id);
     double getModeFactor();
     double getModeSpread();
 
