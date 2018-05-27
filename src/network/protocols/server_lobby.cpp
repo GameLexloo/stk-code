@@ -769,12 +769,7 @@ void ServerLobby::checkRaceFinished()
     if (NetworkConfig::get()->isRankedServer())
     {
         computeNewRankings();
-        if (!m_game_setup->isGrandPrix() ||
-            m_game_setup->isGrandPrixFinished())
-        {
-            // For GP only sumbit ranking at the end of it
-            submitRankingsToAddons();
-        }
+        submitRankingsToAddons();
     }
 
     stopCurrentRace();
@@ -893,10 +888,6 @@ void ServerLobby::computeNewRankings()
     // Don't merge it in the main loop as new_scores value are used there
     for (unsigned i = 0; i < players.size(); i++)
     {
-        // Skip disconnected player
-        if (players[i].expired())
-            continue;
-
         new_scores[i] += scores_change[i];
         const uint32_t id = race_manager->getKartInfo(i).getOnlineId();
         m_scores.at(id) =  new_scores[i];
@@ -1784,18 +1775,17 @@ void ServerLobby::submitRankingsToAddons()
     };   // UpdatePlayerRankingRequest
     // --------------------------------------------------------------------
 
-    auto players = m_game_setup->getConnectedPlayers();
-    for (auto& player : players)
+    for (unsigned i = 0; i < race_manager->getNumPlayers(); i++)
     {
-        const uint32_t id = player->getOnlineId();
+        const uint32_t id = race_manager->getKartInfo(i).getOnlineId();
         SumbitRankingRequest* request = new SumbitRankingRequest
             (id, m_scores.at(id), m_max_scores.at(id),
             m_num_ranked_races.at(id));
         NetworkConfig::get()->setUserDetails(request, "submit-ranking");
         Log::info("ServerLobby", "Submiting ranking for %s (%d) : %lf, %lf %d",
-            StringUtils::wideToUtf8(player->getName()).c_str(),
-            id, m_scores.at(id), m_max_scores.at(id),
-            m_num_ranked_races.at(id));
+            StringUtils::wideToUtf8(
+            race_manager->getKartInfo(i).getPlayerName()).c_str(), id,
+            m_scores.at(id), m_max_scores.at(id), m_num_ranked_races.at(id));
         request->queue();
     }
 }   // submitRankingsToAddons
