@@ -742,7 +742,8 @@ void STKHost::mainLoop()
             {
                 if (!it->second->isClientServerTokenSet() &&
                     (float)StkTime::getRealTime() >
-                    it->second->getConnectedTime() + 7.0f)
+                    it->second->getConnectedTime() + 7.0f &&
+                    sl->noConnection())
                 {
                     Log::info("STKHost", "%s has no token for more than 7"
                         " seconds, disconnect it by force.",

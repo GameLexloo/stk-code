@@ -176,6 +176,11 @@ public:
     void finishedLoadingWorld() OVERRIDE;
     ServerState getCurrentState() const { return m_state.load(); }
     void updateBanList();
+    bool noConnection()
+    {
+        std::unique_lock<std::mutex> ul(m_connection_mutex, std::defer_lock);
+        return ul.try_lock();
+    }
     virtual bool waitingForPlayers() const OVERRIDE;
     virtual bool allPlayersReady() const OVERRIDE
                             { return m_state.load() >= WAIT_FOR_RACE_STARTED; }
