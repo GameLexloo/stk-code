@@ -21,6 +21,7 @@
 #ifndef HEADER_STRING_UTILS_HPP
 #define HEADER_STRING_UTILS_HPP
 
+#include <limits>
 #include <string>
 #include <vector>
 #include <sstream>
@@ -66,10 +67,20 @@ namespace StringUtils
 
     // ------------------------------------------------------------------------
     template <class T>
-    std::string toString (const T& any)
+    std::string toString(const T& any)
     {
         std::ostringstream oss;
-        oss << any ;
+        oss << any;
+        return oss.str();
+    }   // toString template
+
+    // ------------------------------------------------------------------------
+    template <>
+    inline std::string toString(const double& any)
+    {
+        std::ostringstream oss;
+        oss.precision(std::numeric_limits<double>::max_digits10);
+        oss << any;
         return oss.str();
     }   // toString template
 
