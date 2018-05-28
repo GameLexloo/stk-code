@@ -41,6 +41,8 @@ private:
      * (disconnected). */
     std::weak_ptr<STKPeer> m_server_owner;
 
+    std::atomic<uint32_t> m_server_owner_id;
+
     /** Available karts and tracks for all clients, this will be initialized
      *  with data in server first. */
     std::pair<std::set<std::string>, std::set<std::string> > m_available_kts;
@@ -110,9 +112,9 @@ private:
     void startedRaceOnClient(Event *event);
     void kickHost(Event* event);
     void handleChat(Event* event);
-    void unregisterServer();
+    void unregisterServer(bool now);
     void createServerIdFile();
-    void updatePlayerList();
+    void updatePlayerList(bool force_update = false);
     void updateServerOwner();
     bool checkPeersReady() const
     {
